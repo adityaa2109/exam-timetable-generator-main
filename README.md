@@ -1,7 +1,10 @@
 # Smart University Examination Timetable Generator
 
 A C++17 console application that schedules university exams with no student clashes, using as few time slots as possible.
-It models the problem as **graph colouring** and solves it with **Greedy**, **DSATUR**, **Backtracking** and **Branch and Bound**.
+
+**Live demo — Slotwise:** https://exam-timetable-generator-eta.vercel.app is a web app on top of the same C++ engine, compiled to WebAssembly.
+
+It models the problem as **graph colouring** and solves it with **Greedy**, **Backtracking** and **Branch and Bound**.
 
 | Concept   | In the graph                                  |
 |-----------|-----------------------------------------------|
@@ -20,7 +23,7 @@ dsa_prj/
 ├── include/
 │   ├── Models.h              Subject, Batch, TimeSlot, ConflictEdge
 │   ├── Graph.h               adjacency list + adjacency matrix
-│   ├── Coloring.h            verifier, greedy, DSATUR, clique bound, shared types
+│   ├── Coloring.h            verifier, greedy, clique bound, shared types
 │   ├── Backtracking.h        m-colouring decision search
 │   ├── BranchAndBound.h      minimum-slot search with pruning
 │   ├── Scheduler.h           data store, slot mapping, file I/O
@@ -33,6 +36,9 @@ dsa_prj/
 │   ├── sample_a.txt          small college
 │   ├── sample_b.txt          crown graph (greedy 3 vs optimal 2)
 │   └── sample_c.txt          30-subject stress test
+├── web/                      browser version (index.html, app.js, style.css,
+│                             timetable.js + timetable.wasm built by `make web`)
+├── vercel.json               serves web/ as a static site on Vercel
 ├── tools/make_single.sh      regenerates main_single.cpp
 └── docs/REPORT.md            dry runs, analysis, viva questions, report outline
 ```
@@ -69,6 +75,43 @@ After editing anything in `include/` or `src/`, run `make single` to regenerate 
 
 Both builds compile with **zero warnings** using `-Wall -Wextra`, and also using `-Wpedantic -Wshadow`.
 The self-tests run 30 checks, and all of them pass.
+
+### Web version (Slotwise)
+
+`web/` is **Slotwise**, a browser front end for the unchanged C++ engine. It has five pages:
+
+* **Overview** — engine status and dataset statistics.
+* **Timetable** — the day × session grid, with hover-to-inspect conflicts.
+* **Conflict graph** — interactive and coloured by slot.
+* **Algorithm lab** — greedy vs optimal side by side, plus every algorithm in one table.
+* **Data** — enter your own data. **Quick entry** takes whole lists of time slots, batches and subjects at once; the Subjects, Batches and Time slots tabs edit one record at a time; **Import & samples** loads a data file or an optional demo dataset.
+
+The **Engine console** gives the original menu.
+
+Slotwise starts empty and never needs the built-in samples. In **Data → Quick entry**, type or paste one line per record:
+
+```
+Time slots     Day 1 - 09:00 AM                         (one label per line, or "generate" days x sessions)
+Batches        CSE Year 1 | 60 | CS101, MA101, PH101     (name | students | subject codes)
+Subjects       CS101 | Programming Fundamentals           (optional: code | name | students)
+```
+
+Subjects named in a batch are created automatically, and every pair of subjects in one batch becomes a clash. Time slots can be switched on and off in the Time slots tab, which controls which slots the engine may use.
+
+How it connects:
+
+* `make web` compiles `src/*.cpp` to WebAssembly with Emscripten, running in the `emscripten/emsdk` Docker image.
+* The engine runs in a Web Worker (`web/worker.js`) and still talks over stdin/stdout. In the browser, `Console::readLine` waits for a line from the page using Emscripten's Asyncify.
+* The GUI uses a small **machine protocol** on that same stdin/stdout (`include/MachineApi.h`). At the main-menu prompt, a line `@<id> <verb> [payload]` returns exactly one `@@BEGIN <id> / {json} / @@END <id>` block.
+* Verbs: `state`, `run greedy|backtrack|bnb`, `compare`, `sample`, `subject.add`, `batch.add`, `slot.set`, `save`/`load`, `tests` and more.
+* Every number the GUI shows comes from these responses. Nothing is computed in JavaScript.
+* The protocol works in the terminal build too, for example `printf '@1 sample b\n@2 compare\n14\n' | ./timetable`.
+
+The output in `web/` is plain static files:
+
+```bash
+npx vercel deploy --prod
+```
 
 ## 3. Menu
 

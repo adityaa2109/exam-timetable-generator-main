@@ -15,7 +15,7 @@ ColoringResult BacktrackingColorer::canColor(int k) {
     backtracks_ = 0;
     cutOff_ = false;
     colors_.assign(static_cast<std::size_t>(n), kUncolored);
-    dsaturColoring(graph_, &order_);  // only the visit order is used
+    order_ = constrainedFirstOrder(graph_);
     clock_.restart();
 
     const bool found = (n == 0) || (k > 0 && solve(0));

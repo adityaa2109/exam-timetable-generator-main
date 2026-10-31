@@ -1,6 +1,6 @@
 // =============================================================================
-// Coloring.h - shared colouring types, the verifier, greedy colouring
-// (input order / Welsh-Powell / DSATUR) and the greedy clique lower bound.
+// Coloring.h - shared colouring types, the verifier, input-order greedy
+// colouring, the greedy clique lower bound and the shared search order.
 //
 // Colour c (0-based) means "the (c+1)-th available time slot".
 // =============================================================================
@@ -25,7 +25,7 @@ struct SearchLimits {
 
 // Everything an algorithm reports back to the user.
 struct ColoringResult {
-    std::string method;             // e.g. "Greedy (DSATUR)"
+    std::string method;             // e.g. "Greedy - Input order"
     std::vector<int> colors;        // colour per vertex, kUncolored if none
     int slotsUsed = 0;
     double timeMs = 0.0;
@@ -45,10 +45,6 @@ struct ValidationReport {
     std::vector<int> uncolored;                 // vertices with no slot
     std::vector<std::pair<int, int>> clashes;   // edges whose ends share a slot
 };
-
-enum class GreedyOrder { Input, WelshPowell, Dsatur };
-
-std::string greedyOrderName(GreedyOrder order);
 
 // Small RAII timer: starts on construction.
 class Stopwatch {
@@ -87,24 +83,13 @@ ValidationReport validateColoring(const Graph& graph, const std::vector<int>& co
 // -----------------------------------------------------------------------------
 std::vector<int> greedyColorInOrder(const Graph& graph, const std::vector<int>& order);
 
-// Vertices sorted by descending degree, ties by index (Welsh-Powell order).
-// Time O(V log V), Space O(V).
+// Vertices sorted by descending degree, ties by index. Used to seed the
+// clique search. Time O(V log V), Space O(V).
 std::vector<int> degreeOrder(const Graph& graph);
 
-// -----------------------------------------------------------------------------
-// dsaturColoring  (Brelaz 1979)
-//   Purpose : greedy colouring whose order is chosen dynamically: always colour
-//             the vertex with the most distinct colours among its neighbours
-//             (saturation), ties broken by degree, then by index.
-//   Input   : graph; optional out-parameter receiving the visit order.
-//   Output  : colour per vertex.
-//   Time    : O(V^2 + E log V)  (linear scan for the next vertex, set inserts)
-//   Space   : O(V + E)
-// -----------------------------------------------------------------------------
-std::vector<int> dsaturColoring(const Graph& graph, std::vector<int>* visitOrder = nullptr);
-
-// Runs one greedy variant, timed, and packs the result.
-ColoringResult greedyColoring(const Graph& graph, GreedyOrder order);
+// Plain greedy colouring in input order (subject 0, 1, 2, ...), timed and
+// packed into a ColoringResult. Fast, but not always optimal.
+ColoringResult greedyColoring(const Graph& graph);
 
 // -----------------------------------------------------------------------------
 // greedyClique
@@ -121,3 +106,14 @@ std::vector<int> greedyClique(const Graph& graph);
 // "moved subjects" are meaningful. The result still uses colours 0..k-1.
 // Time O(V + k^3), Space O(k^2).
 std::vector<int> alignColors(const std::vector<int>& reference, const std::vector<int>& target);
+
+// -----------------------------------------------------------------------------
+// constrainedFirstOrder
+//   Purpose : static visiting order for the exact searches (backtracking and
+//             branch and bound): a greedy clique first (those vertices are
+//             forced onto distinct colours anyway), then the remaining vertices
+//             by descending degree, so tightly constrained subjects come early
+//             and failures happen near the root of the search tree.
+//   Time    : O(V^3) (dominated by greedyClique)    Space: O(V)
+// -----------------------------------------------------------------------------
+std::vector<int> constrainedFirstOrder(const Graph& graph);

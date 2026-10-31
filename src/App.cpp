@@ -70,10 +70,27 @@ std::vector<std::string> wrapItems(const std::string& prefix, const std::vector<
 // ----------------------------------------------------------------------------
 int App::run() {
     try {
+        bool showMenuNext = true;
+        bool quietPrompt = false;
         while (true) {
-            showMenu();
-            const int choice = console_.readInt("Enter choice (1-16): ", 1, 16);
-            if (!handleChoice(choice)) break;
+            if (showMenuNext) showMenu();
+            // After a machine command the prompt is not repeated, so GUI
+            // traffic does not flood a human reading the same console.
+            const std::string line = console_.readLine(quietPrompt ? "" : "Enter choice (1-16): ");
+            quietPrompt = false;
+            showMenuNext = false;
+            if (!line.empty() && line[0] == '@') {
+                machine_.handle(line, std::cout);
+                quietPrompt = true;
+                continue;
+            }
+            long long choice = 0;
+            if (!Console::parseNumber(line, 1, 16, choice)) {
+                std::cout << console_.bad("  Please enter a whole number between 1 and 16.") << '\n';
+                continue;
+            }
+            if (!handleChoice(static_cast<int>(choice))) break;
+            showMenuNext = true;
         }
     } catch (const InputClosed&) {
         std::cout << "\nInput closed - exiting.\n";
@@ -529,7 +546,7 @@ void App::presentResult(const ColoringResult& result) {
     if (result.upperBound > 0) {
         std::cout << "  Nodes pruned        : " << result.nodesPruned << '\n'
                   << "  Initial bounds      : LB (clique) = " << result.lowerBound
-                  << ", UB (best greedy) = " << result.upperBound << '\n'
+                  << ", UB (greedy) = " << result.upperBound << '\n'
                   << "  Optimality proven   : " << (result.provenOptimal ? "Yes" : "No") << '\n';
     }
     if (result.cutOff) {
@@ -572,13 +589,7 @@ void App::presentResult(const ColoringResult& result) {
 void App::runGreedy() {
     console_.header("GREEDY COLOURING");
     if (!requireSubjects() || !requireAvailableSlots()) return;
-    std::cout << "  1. Input order\n  2. Descending degree (Welsh-Powell)\n"
-              << "  3. DSATUR (highest saturation first)\n";
-    const int choice = console_.readInt("Ordering: ", 1, 3);
-    const GreedyOrder order = choice == 1   ? GreedyOrder::Input
-                              : choice == 2 ? GreedyOrder::WelshPowell
-                                            : GreedyOrder::Dsatur;
-    presentResult(greedyColoring(scheduler_.graph(), order));
+    presentResult(greedyColoring(scheduler_.graph()));
 }
 
 void App::runBacktracking() {
@@ -629,7 +640,7 @@ void App::runBranchAndBound() {
 void App::compareGreedyVsOptimal() {
     if (!requireSubjects()) return;
     const Graph& graph = scheduler_.graph();
-    const ColoringResult greedy = greedyColoring(graph, GreedyOrder::Input);
+    const ColoringResult greedy = greedyColoring(graph);
     const ColoringResult optimal = BranchAndBoundColorer(graph).solve();
     // Rename optimal slots to match greedy where possible so "moves" are real.
     const std::vector<int> aligned = alignColors(greedy.colors, optimal.colors);

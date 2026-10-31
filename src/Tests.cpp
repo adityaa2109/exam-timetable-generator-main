@@ -70,7 +70,7 @@ std::string expectation(int expected, int actual) {
 void runGraphCase(TestReporter& report, const GraphCase& test) {
     const Graph& g = test.graph;
 
-    const ColoringResult greedy = greedyColoring(g, GreedyOrder::Input);
+    const ColoringResult greedy = greedyColoring(g);
     if (test.expectedGreedy != kSkip) {
         report.check(test.name + ": greedy (input order)",
                      greedy.slotsUsed == test.expectedGreedy &&
@@ -108,7 +108,7 @@ void runSchedulerChecks(TestReporter& report) {
     const Graph& g = scheduler.graph();
     report.check("Sample B: graph built from batches", g.vertexCount() == 6 && g.edgeCount() == 6,
                  "V=" + std::to_string(g.vertexCount()) + ", E=" + std::to_string(g.edgeCount()));
-    const int greedy = greedyColoring(g, GreedyOrder::Input).slotsUsed;
+    const int greedy = greedyColoring(g).slotsUsed;
     const int optimal = BranchAndBoundColorer(g).solve().slotsUsed;
     report.check("Sample B: greedy 3 vs optimal 2", greedy == 3 && optimal == 2,
                  "greedy " + std::to_string(greedy) + ", optimal " + std::to_string(optimal));

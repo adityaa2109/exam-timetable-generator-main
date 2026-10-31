@@ -38,11 +38,10 @@ Then choose menu **9**.
   ======= GREEDY vs OPTIMAL =======
   Metric                 Greedy        Optimal
   Slots used             3             2
-  Time taken (ms)        0.000         0.005
-  Nodes explored         -             0
+  Time taken (ms)        0.001         0.007
+  Nodes explored         -             7
   Conflict-free?         Yes           Yes
   Optimality proven?     No            Yes
-  (Best greedy UB = clique LB = 2, so optimality was proven without searching.)
 
   Greedy timetable                  Optimal timetable
   Slot 1 | A1, B1                   Slot 1 | A1, A2, A3
@@ -67,9 +66,10 @@ A2 is adjacent to B1, so it gets slot 2, and B2 is adjacent to A1, so it also ge
 A3 is adjacent to B1 (slot 1) and B2 (slot 2), so it is forced into slot 3, and B3 is forced into slot 3 in the same way.
 The graph is bipartite, with all A subjects on one side and all B subjects on the other, so 2 slots are enough.
 
-**Why B&B explores 0 nodes.** B&B first computes all three greedy colourings, and DSATUR already finds 2 slots, giving UB = 2.
-Any single edge is a clique of size 2, giving LB = 2. Since UB = LB, the answer is proven optimal before any search begins.
-For a case where B&B has to search, see the wheel W6 test (`--test`) or Sample C, where LB = 8 and UB = 9 and the search proves 9 in 56 nodes.
+**Why B&B needs only 7 nodes.** B&B starts from the input-order greedy colouring, which uses 3 slots, so UB = 3.
+Any single edge is a clique of size 2, giving LB = 2. Since UB > LB, the search runs: it fixes the clique first and then explores the remaining subjects with bound, symmetry and forward-checking pruning.
+It finds a 2-slot colouring after 7 nodes, which matches LB, so the answer is proven optimal and the search stops.
+For a case where the gap is larger, see the wheel W6 test (`--test`) or Sample C, where LB = 8 and UB = 10 and the search proves 9 in 100 nodes.
 
 ---
 
@@ -109,7 +109,7 @@ P, Q and R form a triangle, so χ ≥ 3.
 
 Result: 3 slots, {P}, {Q, S}, {R}. The verifier checks all 5 edges and finds no clash.
 
-### 5.2 DSATUR order (used by backtracking)
+### 5.2 Search order (used by backtracking and branch and bound)
 
 | Step | Saturation (uncoloured) | Pick (reason) | Slot |
 |------|--------------------------|---------------|------|
@@ -168,9 +168,7 @@ The algorithm visits vertices in some order and gives each one the smallest colo
 A "stamp" array avoids clearing between vertices, so each adjacency list is scanned exactly once.
 
 * **Input order:** O(V + E) time, O(V) space.
-* **Welsh–Powell** (descending degree): adds an O(V log V) sort. High-degree vertices are coloured while many colours are still free.
-* **DSATUR:** always picks the vertex with the most distinct neighbour colours. This is O(V² + E log V) using a linear scan plus a `std::set` of neighbour colours per vertex.
-  DSATUR is optimal on bipartite graphs, which is why it solves Sample B.
+* The order is fixed by the input, so the quality of the result depends on it. The crown graph (Sample B) shows the worst case: greedy uses 3 slots where 2 suffice.
 
 Greedy never uses more than Δ + 1 colours, where Δ is the maximum degree, but it can be arbitrarily worse than χ (see the crown graph).
 
@@ -179,24 +177,24 @@ The verifier checks that every vertex is coloured and that every edge has two di
 It runs after every generated timetable. **Time:** O(V + E). **Space:** O(V).
 
 ### 6.4 Backtracking (m-colouring decision)
-Backtracking is a depth-first search over assignments in DSATUR order.
+Backtracking is a depth-first search over assignments in a static order: a greedy clique first, then the rest by descending degree.
 `isSafe` checks the vertices already placed using the O(1) adjacency matrix, which costs O(V) per check.
 **Time:** O(k^V) in the worst case. **Space:** O(V), plus O(V) recursion depth.
 
 Pruning makes the search far smaller in practice. A clash discards all k^(remaining) completions of a partial assignment at once.
-DSATUR order puts the most constrained subjects first, so failures happen near the root, where each cut removes the most work.
+This order puts the most constrained subjects first, so failures happen near the root, where each cut removes the most work.
 
 ### 6.5 Branch and Bound (minimise slots)
-* **UB** is the best of the three greedy colourings. **LB** is the size of a greedy clique.
+* **UB** is the input-order greedy colouring. **LB** is the size of a greedy clique.
   If UB = LB, the search stops immediately because the answer is optimal.
-* **Search order:** clique vertices first, then the rest in DSATUR order.
+* **Search order:** clique vertices first, then the rest by descending degree.
 * **Rule 1 (bound):** prune when `colorsUsed ≥ best`.
 * **Rule 2 (symmetry):** a vertex can take an existing colour or exactly one new colour. This removes the k! relabellings of every colouring.
 * **Rule 3 (forward checking):** a counter `conflictCount[v][c]` makes "does u still have a free colour below best−1?" an O(UB) check for each neighbour.
 * **Safety limits:** the search stops at 5,000,000 nodes or 5 s by default (both are user-adjustable) and returns the best colouring so far, marked "may not be optimal".
 
 **Time:** O(UB^V) in the worst case. **Space:** O(V · UB).
-On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decide k = 8 within 5,000,000 nodes.
+On Sample C, B&B proves χ = 9 in 100 nodes. Plain backtracking cannot even decide k = 8 within 5,000,000 nodes.
 
 ### 6.6 Complexity table
 
@@ -204,8 +202,6 @@ On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decid
 |---|---|---|
 | Graph construction | O(V² + Σ s² log E) | O(V² + E) |
 | Greedy, input order | O(V + E) | O(V) |
-| Greedy, Welsh–Powell | O(V log V + E) | O(V) |
-| DSATUR | O(V² + E log V) | O(V + E) |
 | Verifier | O(V + E) | O(V) |
 | Clique lower bound | O(V³) | O(V) |
 | Backtracking `canColor(k)` | O(k^V) | O(V) |
@@ -216,7 +212,7 @@ On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decid
   A proposed colouring can be checked in O(V + E), so the problem is in NP. The reduction makes it NP-hard.
 * **Optimisation version:** finding χ(G) is NP-hard. A polynomial-time algorithm for χ would decide 3-colourability.
   Approximating χ within a factor of V^(1−ε) is also NP-hard (Zuckerman 2007).
-* **Consequence:** no polynomial exact algorithm is known, so the project uses fast heuristics (greedy and DSATUR) for upper bounds.
+* **Consequence:** no polynomial exact algorithm is known, so the project uses a fast heuristic (greedy) for the upper bound.
   It uses exact searches (backtracking and B&B) with pruning and safety limits when optimality matters.
 * **Easy special cases:** k = 1 (the graph has no edges) and k = 2 (bipartite check by BFS, O(V + E)) are polynomial.
 
@@ -224,11 +220,11 @@ On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decid
 
 ## 7. Greedy vs Backtracking vs Branch and Bound
 
-| | Greedy (input / Welsh–Powell / DSATUR) | Backtracking (`canColor(k)`) | Branch and Bound |
+| | Greedy (input order) | Backtracking (`canColor(k)`) | Branch and Bound |
 |---|---|---|---|
 | Question answered | "Give me a valid timetable quickly" | "Does it fit in k slots?" | "What is the minimum number of slots?" |
 | Optimal? | No (crown graph: 3 vs 2) | Exact for the given k | Exact (proven unless cut off) |
-| Time | O(V + E) to O(V²) | O(k^V) worst case | O(UB^V) worst case, heavily pruned |
+| Time | O(V + E) | O(k^V) worst case | O(UB^V) worst case, heavily pruned |
 | Pros | Instant, simple, scales to thousands of subjects | Simple, answers a real constraint ("we only have 8 slots") | Finds and proves the optimum, and stops early when UB = LB |
 | Cons | Quality depends on order, no guarantee | Must loop over k to find χ; proving "no" can explode | More complex code, still exponential in the worst case |
 | When to use | Large inputs, first draft, upper bound | Fixed slot budget, small or medium inputs | Small or medium inputs where every slot matters |
@@ -243,14 +239,14 @@ On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decid
    It is the minimum number of colours in a proper colouring, χ(G). Here it is the minimum number of exam slots.
 3. **Why is greedy not optimal? Give an example.**
    Greedy commits to early choices and never revises them. On the crown graph in order A1, B1, A2, B2, A3, B3 it uses 3 slots, but 2 are enough.
-4. **What is DSATUR and why is it better?**
-   It colours the vertex with the most distinct neighbour colours first, so the most constrained subjects are placed before they run out of options. It is exact for bipartite graphs.
+4. **How are the exact searches ordered?**
+   Both start with a greedy clique, whose vertices are forced onto distinct colours, then continue with the remaining subjects by descending degree. The most constrained subjects are placed first, so dead ends appear near the root.
 5. **What does `isSafe` do, and why use an adjacency matrix?**
    It checks that no already-coloured neighbour has the same colour. The matrix gives an O(1) "are u and v in conflict?" test inside the search.
 6. **Difference between backtracking and branch and bound?**
    Backtracking answers a yes/no question (k-colourable?) and prunes only infeasible branches. B&B optimises, so it also prunes branches that cannot beat the best solution found so far, using bounds.
 7. **How are the bounds computed?**
-   UB is the best greedy colouring. LB is the size of a clique found greedily, because a clique of size c needs c colours. If UB = LB, the answer is optimal immediately.
+   UB is the greedy colouring. LB is the size of a clique found greedily, because a clique of size c needs c colours. If UB = LB, the answer is optimal immediately.
 8. **What is symmetry breaking?**
    Colour names are interchangeable, so a vertex may take only an existing colour or the next new one. This removes up to k! duplicate subtrees.
 9. **What is forward checking?**
@@ -266,17 +262,17 @@ On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decid
 
 ## 9. Project report outline
 
-1. **Abstract:** the problem, the graph-colouring model, the four algorithms, and the key result (B&B saves slots that greedy wastes, with proof of optimality).
+1. **Abstract:** the problem, the graph-colouring model, the three algorithms (greedy, backtracking, branch and bound), and the key result (B&B saves slots that greedy wastes, with proof of optimality).
 2. **Introduction:** why exam scheduling matters, the manual-scheduling pain points, and the project objectives.
 3. **Problem definition:** inputs (subjects, batches, slots), the hard constraint (no batch has two exams in one slot), the objective (minimise slots), and the formal graph model.
-4. **Data structures used:** `vector` records; adjacency list vs matrix (and why both are kept); `map` for merging edges; `set` for DSATUR saturation; the counter matrix for forward checking; `optional` for the last result.
-5. **Algorithms:** greedy (three orderings), DSATUR, the verifier, the clique bound, backtracking, and B&B with its pruning rules. For each one, give pseudocode, the Section 5 dry run, and complexity.
+4. **Data structures used:** `vector` records; adjacency list vs matrix (and why both are kept); `map` for merging edges; the counter matrix for forward checking; `optional` for the last result.
+5. **Algorithms:** greedy, the verifier, the clique bound, backtracking, and B&B with its pruning rules. For each one, give pseudocode, the Section 5 dry run, and complexity.
 6. **Implementation:** module diagram (Models → Graph → Coloring → Backtracking / B&B → Scheduler → App), menu flow, input validation, file format, and RAII with no raw `new`/`delete`.
 7. **Results:** screenshots of the Sample A, B and C runs, the comparison table (Section 4), self-test output, and a slots/nodes/time table for each sample.
 8. **Limitations:** exponential worst case; only hard constraints are modelled; no room capacity; the clique bound can be weak (χ − ω can be large); single-threaded.
 9. **Conclusion:** greedy is fast but can waste slots, while B&B finds and proves the minimum for realistic sizes.
 10. **Future scope:** see Section 10.
-11. **References:** Brélaz (1979) "New methods to color the vertices of a graph"; Welsh & Powell (1967); Karp (1972); Cormen et al., *Introduction to Algorithms*.
+11. **References:** Karp (1972); Cormen et al., *Introduction to Algorithms*.
 
 ---
 
@@ -286,6 +282,6 @@ On Sample C, B&B proves χ = 9 in 56 nodes. Plain backtracking cannot even decid
 * **Invigilator allocation:** after colouring, assign staff to (slot, room) pairs as bipartite matching or flow, with a cap on duties per teacher.
 * **Priority or fixed-slot subjects:** pre-colour some vertices, such as a university-wide exam fixed on Day 1, and colour the rest around them, which is list colouring.
 * **Gap between exams for the same batch:** add soft constraints such as "no two exams on the same day for a batch", optimised with weighted penalties, local search, tabu search or simulated annealing.
-* **Larger instances:** use stronger lower bounds (fractional or LP bounds), DSATUR-based B&B with dynamic ordering, or ILP/SAT solvers.
+* **Larger instances:** use stronger lower bounds (fractional or LP bounds), dynamic variable ordering in the search, or ILP/SAT solvers.
 * **GUI or web front end:** a REST wrapper around `ExamScheduler` with a calendar view, and drag-and-drop with live conflict checking through the verifier.
 * **Export:** CSV export using the same record layout as the data file, plus PDF or HTML timetables per batch and per room.

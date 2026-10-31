@@ -2,11 +2,11 @@
 // BranchAndBound.h - minimum number of slots (chromatic number).
 //
 // Bounds
-//   UB (upper bound) = best of the three greedy colourings - a real timetable.
+//   UB (upper bound) = the input-order greedy colouring - a real timetable.
 //   LB (lower bound) = size of a greedily found clique - any clique of size c
 //                      needs c distinct slots. If UB == LB we are done.
 // Branching
-//   Vertices are coloured in a fixed order (clique first, then DSATUR order).
+//   Vertices are coloured in a fixed order (clique first, then descending degree).
 //   colorsUsed = number of distinct colours in the partial colouring.
 // Pruning
 //   (1) Bound      : colorsUsed >= best  -> this branch cannot improve, cut.

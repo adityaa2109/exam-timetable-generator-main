@@ -25,12 +25,8 @@ ColoringResult BranchAndBoundColorer::solve() {
         return result;
     }
 
-    // Upper bound: the best greedy timetable we can build cheaply.
-    ColoringResult incumbent = greedyColoring(graph_, GreedyOrder::Input);
-    for (GreedyOrder order : {GreedyOrder::WelshPowell, GreedyOrder::Dsatur}) {
-        ColoringResult candidate = greedyColoring(graph_, order);
-        if (candidate.slotsUsed < incumbent.slotsUsed) incumbent = std::move(candidate);
-    }
+    // Upper bound: the input-order greedy timetable (a real, valid timetable).
+    const ColoringResult incumbent = greedyColoring(graph_);
     best_ = incumbent.slotsUsed;
     bestColors_ = incumbent.colors;
 
@@ -60,11 +56,9 @@ ColoringResult BranchAndBoundColorer::solve() {
 
 std::vector<int> BranchAndBoundColorer::buildOrder(const std::vector<int>& clique) const {
     // Clique vertices first: they are forced to take colours 0..c-1, which
-    // fixes the colour names early. Then DSATUR order for the rest.
+    // fixes the colour names early. Then the rest by descending degree.
     std::vector<int> order(clique);
-    std::vector<int> dsaturOrder;
-    dsaturColoring(graph_, &dsaturOrder);
-    for (int v : dsaturOrder) {
+    for (int v : constrainedFirstOrder(graph_)) {
         if (std::find(clique.begin(), clique.end(), v) == clique.end()) order.push_back(v);
     }
     return order;

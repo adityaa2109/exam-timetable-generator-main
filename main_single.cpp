@@ -113,8 +113,8 @@ private:
 
 // ======================= include/Coloring.h =======================
 // =============================================================================
-// Coloring.h - shared colouring types, the verifier, greedy colouring
-// (input order / Welsh-Powell / DSATUR) and the greedy clique lower bound.
+// Coloring.h - shared colouring types, the verifier, input-order greedy
+// colouring, the greedy clique lower bound and the shared search order.
 //
 // Colour c (0-based) means "the (c+1)-th available time slot".
 // =============================================================================
@@ -137,7 +137,7 @@ struct SearchLimits {
 
 // Everything an algorithm reports back to the user.
 struct ColoringResult {
-    std::string method;             // e.g. "Greedy (DSATUR)"
+    std::string method;             // e.g. "Greedy - Input order"
     std::vector<int> colors;        // colour per vertex, kUncolored if none
     int slotsUsed = 0;
     double timeMs = 0.0;
@@ -157,10 +157,6 @@ struct ValidationReport {
     std::vector<int> uncolored;                 // vertices with no slot
     std::vector<std::pair<int, int>> clashes;   // edges whose ends share a slot
 };
-
-enum class GreedyOrder { Input, WelshPowell, Dsatur };
-
-std::string greedyOrderName(GreedyOrder order);
 
 // Small RAII timer: starts on construction.
 class Stopwatch {
@@ -199,24 +195,13 @@ ValidationReport validateColoring(const Graph& graph, const std::vector<int>& co
 // -----------------------------------------------------------------------------
 std::vector<int> greedyColorInOrder(const Graph& graph, const std::vector<int>& order);
 
-// Vertices sorted by descending degree, ties by index (Welsh-Powell order).
-// Time O(V log V), Space O(V).
+// Vertices sorted by descending degree, ties by index. Used to seed the
+// clique search. Time O(V log V), Space O(V).
 std::vector<int> degreeOrder(const Graph& graph);
 
-// -----------------------------------------------------------------------------
-// dsaturColoring  (Brelaz 1979)
-//   Purpose : greedy colouring whose order is chosen dynamically: always colour
-//             the vertex with the most distinct colours among its neighbours
-//             (saturation), ties broken by degree, then by index.
-//   Input   : graph; optional out-parameter receiving the visit order.
-//   Output  : colour per vertex.
-//   Time    : O(V^2 + E log V)  (linear scan for the next vertex, set inserts)
-//   Space   : O(V + E)
-// -----------------------------------------------------------------------------
-std::vector<int> dsaturColoring(const Graph& graph, std::vector<int>* visitOrder = nullptr);
-
-// Runs one greedy variant, timed, and packs the result.
-ColoringResult greedyColoring(const Graph& graph, GreedyOrder order);
+// Plain greedy colouring in input order (subject 0, 1, 2, ...), timed and
+// packed into a ColoringResult. Fast, but not always optimal.
+ColoringResult greedyColoring(const Graph& graph);
 
 // -----------------------------------------------------------------------------
 // greedyClique
@@ -234,12 +219,23 @@ std::vector<int> greedyClique(const Graph& graph);
 // Time O(V + k^3), Space O(k^2).
 std::vector<int> alignColors(const std::vector<int>& reference, const std::vector<int>& target);
 
+// -----------------------------------------------------------------------------
+// constrainedFirstOrder
+//   Purpose : static visiting order for the exact searches (backtracking and
+//             branch and bound): a greedy clique first (those vertices are
+//             forced onto distinct colours anyway), then the remaining vertices
+//             by descending degree, so tightly constrained subjects come early
+//             and failures happen near the root of the search tree.
+//   Time    : O(V^3) (dominated by greedyClique)    Space: O(V)
+// -----------------------------------------------------------------------------
+std::vector<int> constrainedFirstOrder(const Graph& graph);
+
 // ======================= include/Backtracking.h =======================
 // =============================================================================
 // Backtracking.h - m-colouring decision problem: "can the exams fit in k slots?"
 //
-// Idea: colour vertices one at a time (DSATUR order, so tightly constrained
-// subjects come first). For each vertex try colours 0..k-1; keep the first
+// Idea: colour vertices one at a time (clique first, then by descending
+// degree, so tightly constrained subjects come first). For each vertex try colours 0..k-1; keep the first
 // colour that is safe (no adjacent subject already has it) and recurse. If
 // no colour works, undo and return to the previous vertex (backtrack).
 //
@@ -248,7 +244,7 @@ std::vector<int> alignColors(const std::vector<int>& reference, const std::vecto
 //
 // Why pruning helps in practice: isSafe() rejects a colour as soon as one
 // neighbour clashes, so a whole subtree of k^(remaining) assignments is
-// discarded in O(V) time. Colouring high-saturation vertices first makes
+// discarded in O(V) time. Colouring highly constrained vertices first makes
 // those failures happen near the root, where each cut removes the most work.
 // =============================================================================
 
@@ -292,11 +288,11 @@ private:
 // BranchAndBound.h - minimum number of slots (chromatic number).
 //
 // Bounds
-//   UB (upper bound) = best of the three greedy colourings - a real timetable.
+//   UB (upper bound) = the input-order greedy colouring - a real timetable.
 //   LB (lower bound) = size of a greedily found clique - any clique of size c
 //                      needs c distinct slots. If UB == LB we are done.
 // Branching
-//   Vertices are coloured in a fixed order (clique first, then DSATUR order).
+//   Vertices are coloured in a fixed order (clique first, then descending degree).
 //   colorsUsed = number of distinct colours in the partial colouring.
 // Pruning
 //   (1) Bound      : colorsUsed >= best  -> this branch cannot improve, cut.
@@ -489,6 +485,9 @@ public:
     int readInt(const std::string& prompt, int min, int max);
     long long readLong(const std::string& prompt, long long min, long long max);
     bool readYesNo(const std::string& prompt);
+    // Whole-line integer parse with range check (no stream state involved).
+    static bool parseNumber(const std::string& text, long long min, long long max,
+                            long long& value);
     void pause();
 
     void toggleColors() { colors_ = !colors_; }
@@ -507,7 +506,11 @@ public:
 
 private:
     std::string paint(const std::string& text, const char* code) const;
+#ifdef __EMSCRIPTEN__
+    bool colors_ = true;  // the web terminal always renders ANSI colours
+#else
     bool colors_ = false;
+#endif
 };
 
 // ======================= include/Tests.h =======================
@@ -519,6 +522,52 @@ private:
 
 // Runs every check, printing PASS/FAIL lines. Returns the number of failures.
 int runSelfTests(std::ostream& out);
+
+// ======================= include/MachineApi.h =======================
+// =============================================================================
+// MachineApi.h - line-based machine protocol on the same stdin/stdout as the
+// menu. Used by the web UI (Slotwise) and usable from any script.
+//
+// At the main-menu prompt, a line of the form
+//     @<id> <verb> [payload]
+// runs one command and prints exactly one block:
+//     @@BEGIN <id>
+//     {"ok":true, ...single-line JSON...}
+//     @@END <id>
+// Payload fields are separated by '|', the same character the data layer
+// already forbids inside names. Verbs:
+//     state                          subjects, batches, slots, edges, stats
+//     run greedy [input]            greedy colouring (input order)
+//     run backtrack <k> [nodes] [ms] m-colouring decision
+//     run bnb [nodes] [ms]           branch and bound
+//     compare                        input-order greedy vs branch and bound
+//     sample a|b|c                   load a built-in dataset
+//     subject.add CODE|Name|students   subject.remove <id>
+//     batch.add Name|students|id,id    batch.remove <id>
+//     slot.add Label   slot.remove <id>   slot.set <id>|1|0
+//     clear   save <path>   load <path>   tests
+// =============================================================================
+
+
+#include <ostream>
+#include <string>
+
+class MachineApi {
+public:
+    explicit MachineApi(ExamScheduler& scheduler) : scheduler_(scheduler) {}
+
+    // Handles one "@..." line and writes the response block to `out`.
+    void handle(const std::string& line, std::ostream& out);
+
+private:
+    std::string dispatch(const std::string& verb, const std::string& payload);
+    std::string runCommand(const std::string& payload);
+    std::string stateJson() const;
+    std::string resultJson(const ColoringResult& result) const;
+    std::string compareJson();
+
+    ExamScheduler& scheduler_;
+};
 
 // ======================= include/App.h =======================
 // =============================================================================
@@ -576,6 +625,7 @@ private:
 
     ExamScheduler scheduler_;
     Console console_;
+    MachineApi machine_{scheduler_};  // "@..." lines from the web UI
 };
 
 // ======================= src/Graph.cpp =======================
@@ -724,21 +774,11 @@ int Graph::connectedComponents() const {
 
 // ======================= src/Coloring.cpp =======================
 // =============================================================================
-// Coloring.cpp - verifier, greedy colourings, DSATUR, clique lower bound.
+// Coloring.cpp - verifier, input-order greedy colouring, clique lower bound.
 // =============================================================================
 
 #include <algorithm>
 #include <numeric>
-#include <set>
-
-std::string greedyOrderName(GreedyOrder order) {
-    switch (order) {
-        case GreedyOrder::Input: return "Input order";
-        case GreedyOrder::WelshPowell: return "Welsh-Powell (descending degree)";
-        case GreedyOrder::Dsatur: return "DSATUR (saturation degree)";
-    }
-    return "Unknown";
-}
 
 int countColors(const std::vector<int>& colors) {
     int highest = kUncolored;
@@ -793,62 +833,14 @@ std::vector<int> degreeOrder(const Graph& graph) {
     return order;
 }
 
-std::vector<int> dsaturColoring(const Graph& graph, std::vector<int>* visitOrder) {
-    const int n = graph.vertexCount();
-    std::vector<int> colors(static_cast<std::size_t>(n), kUncolored);
-    std::vector<std::set<int>> neighbourColors(static_cast<std::size_t>(n));
-    std::vector<int> usedBy(static_cast<std::size_t>(n) + 1, -1);
-    if (visitOrder != nullptr) visitOrder->clear();
-
-    for (int step = 0; step < n; ++step) {
-        // Pick the uncoloured vertex with max saturation, then max degree.
-        int pick = -1;
-        for (int v = 0; v < n; ++v) {
-            if (colors[v] != kUncolored) continue;
-            if (pick == -1) {
-                pick = v;
-                continue;
-            }
-            const auto satV = neighbourColors[v].size();
-            const auto satP = neighbourColors[pick].size();
-            if (satV > satP || (satV == satP && graph.degree(v) > graph.degree(pick))) {
-                pick = v;
-            }
-        }
-
-        // Smallest colour not used by a neighbour (same idea as plain greedy).
-        for (int u : graph.neighbors(pick)) {
-            if (colors[u] != kUncolored) usedBy[colors[u]] = pick;
-        }
-        int color = 0;
-        while (usedBy[color] == pick) ++color;
-        colors[pick] = color;
-        if (visitOrder != nullptr) visitOrder->push_back(pick);
-
-        for (int u : graph.neighbors(pick)) neighbourColors[u].insert(color);
-    }
-    return colors;
-}
-
-ColoringResult greedyColoring(const Graph& graph, GreedyOrder order) {
+ColoringResult greedyColoring(const Graph& graph) {
     ColoringResult result;
-    result.method = "Greedy - " + greedyOrderName(order);
+    result.method = "Greedy - Input order";
     const Stopwatch clock;
 
-    switch (order) {
-        case GreedyOrder::Input: {
-            std::vector<int> identity(static_cast<std::size_t>(graph.vertexCount()));
-            std::iota(identity.begin(), identity.end(), 0);
-            result.colors = greedyColorInOrder(graph, identity);
-            break;
-        }
-        case GreedyOrder::WelshPowell:
-            result.colors = greedyColorInOrder(graph, degreeOrder(graph));
-            break;
-        case GreedyOrder::Dsatur:
-            result.colors = dsaturColoring(graph);
-            break;
-    }
+    std::vector<int> identity(static_cast<std::size_t>(graph.vertexCount()));
+    std::iota(identity.begin(), identity.end(), 0);
+    result.colors = greedyColorInOrder(graph, identity);
 
     result.timeMs = clock.elapsedMs();
     result.slotsUsed = countColors(result.colors);
@@ -917,6 +909,16 @@ std::vector<int> alignColors(const std::vector<int>& reference, const std::vecto
     return aligned;
 }
 
+std::vector<int> constrainedFirstOrder(const Graph& graph) {
+    std::vector<int> order = greedyClique(graph);
+    std::vector<bool> placed(static_cast<std::size_t>(graph.vertexCount()), false);
+    for (int v : order) placed[static_cast<std::size_t>(v)] = true;
+    for (int v : degreeOrder(graph)) {
+        if (!placed[static_cast<std::size_t>(v)]) order.push_back(v);
+    }
+    return order;
+}
+
 // ======================= src/Backtracking.cpp =======================
 // =============================================================================
 // Backtracking.cpp - m-colouring by depth-first search with undo.
@@ -934,7 +936,7 @@ ColoringResult BacktrackingColorer::canColor(int k) {
     backtracks_ = 0;
     cutOff_ = false;
     colors_.assign(static_cast<std::size_t>(n), kUncolored);
-    dsaturColoring(graph_, &order_);  // only the visit order is used
+    order_ = constrainedFirstOrder(graph_);
     clock_.restart();
 
     const bool found = (n == 0) || (k > 0 && solve(0));
@@ -1017,12 +1019,8 @@ ColoringResult BranchAndBoundColorer::solve() {
         return result;
     }
 
-    // Upper bound: the best greedy timetable we can build cheaply.
-    ColoringResult incumbent = greedyColoring(graph_, GreedyOrder::Input);
-    for (GreedyOrder order : {GreedyOrder::WelshPowell, GreedyOrder::Dsatur}) {
-        ColoringResult candidate = greedyColoring(graph_, order);
-        if (candidate.slotsUsed < incumbent.slotsUsed) incumbent = std::move(candidate);
-    }
+    // Upper bound: the input-order greedy timetable (a real, valid timetable).
+    const ColoringResult incumbent = greedyColoring(graph_);
     best_ = incumbent.slotsUsed;
     bestColors_ = incumbent.colors;
 
@@ -1052,11 +1050,9 @@ ColoringResult BranchAndBoundColorer::solve() {
 
 std::vector<int> BranchAndBoundColorer::buildOrder(const std::vector<int>& clique) const {
     // Clique vertices first: they are forced to take colours 0..c-1, which
-    // fixes the colour names early. Then DSATUR order for the rest.
+    // fixes the colour names early. Then the rest by descending degree.
     std::vector<int> order(clique);
-    std::vector<int> dsaturOrder;
-    dsaturColoring(graph_, &dsaturOrder);
-    for (int v : dsaturOrder) {
+    for (int v : constrainedFirstOrder(graph_)) {
         if (std::find(clique.begin(), clique.end(), v) == clique.end()) order.push_back(v);
     }
     return order;
@@ -1716,6 +1712,19 @@ void loadSample(ExamScheduler& scheduler, SampleId id) {
 #include <iostream>
 #include <string>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+#include <cstdlib>
+
+// Browser build (web/): the page supplies each line through Module.readLine(),
+// which returns a Promise. Asyncify suspends the C++ stack while it waits.
+EM_ASYNC_JS(char*, web_read_line, (), {
+    const line = await Module.readLine();
+    return stringToNewUTF8(line);
+});
+#endif
+
 namespace {
 
 const char* const kSlotPalette[] = {"\033[36m", "\033[33m", "\033[35m",
@@ -1745,8 +1754,14 @@ bool parseWholeNumber(const std::string& text, long long& value) {
 
 std::string Console::readLine(const std::string& prompt) {
     std::cout << prompt << std::flush;
+#ifdef __EMSCRIPTEN__
+    char* raw = web_read_line();
+    const std::string line(raw);
+    std::free(raw);
+#else
     std::string line;
     if (!std::getline(std::cin, line)) throw InputClosed();
+#endif
     return trimmed(line);
 }
 
@@ -1763,12 +1778,15 @@ std::string Console::readText(const std::string& prompt, const std::string& what
     }
 }
 
+bool Console::parseNumber(const std::string& text, long long min, long long max,
+                          long long& value) {
+    return parseWholeNumber(text, value) && value >= min && value <= max;
+}
+
 long long Console::readLong(const std::string& prompt, long long min, long long max) {
     while (true) {
         long long value = 0;
-        if (parseWholeNumber(readLine(prompt), value) && value >= min && value <= max) {
-            return value;
-        }
+        if (parseNumber(readLine(prompt), min, max, value)) return value;
         std::cout << bad("  Please enter a whole number between " + std::to_string(min) +
                          " and " + std::to_string(max) + ".")
                   << '\n';
@@ -1884,7 +1902,7 @@ std::string expectation(int expected, int actual) {
 void runGraphCase(TestReporter& report, const GraphCase& test) {
     const Graph& g = test.graph;
 
-    const ColoringResult greedy = greedyColoring(g, GreedyOrder::Input);
+    const ColoringResult greedy = greedyColoring(g);
     if (test.expectedGreedy != kSkip) {
         report.check(test.name + ": greedy (input order)",
                      greedy.slotsUsed == test.expectedGreedy &&
@@ -1922,7 +1940,7 @@ void runSchedulerChecks(TestReporter& report) {
     const Graph& g = scheduler.graph();
     report.check("Sample B: graph built from batches", g.vertexCount() == 6 && g.edgeCount() == 6,
                  "V=" + std::to_string(g.vertexCount()) + ", E=" + std::to_string(g.edgeCount()));
-    const int greedy = greedyColoring(g, GreedyOrder::Input).slotsUsed;
+    const int greedy = greedyColoring(g).slotsUsed;
     const int optimal = BranchAndBoundColorer(g).solve().slotsUsed;
     report.check("Sample B: greedy 3 vs optimal 2", greedy == 3 && optimal == 2,
                  "greedy " + std::to_string(greedy) + ", optimal " + std::to_string(optimal));
@@ -2001,6 +2019,398 @@ int runSelfTests(std::ostream& out) {
     return report.failures();
 }
 
+// ======================= src/MachineApi.cpp =======================
+// =============================================================================
+// MachineApi.cpp - structured (JSON) access to the same engine the menu uses.
+// Every number reported here comes straight from the C++ algorithms.
+// =============================================================================
+
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <iomanip>
+#include <sstream>
+#include <vector>
+
+namespace {
+
+constexpr long long kMaxNodeLimit = 1'000'000'000;
+constexpr long long kMaxTimeLimitMs = 600'000;
+constexpr long long kMaxCount = 1'000'000;
+
+std::string jsonText(const std::string& text) {
+    std::string out = "\"";
+    for (const char ch : text) {
+        switch (ch) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(ch) < 0x20) {
+                    char escaped[8];
+                    std::snprintf(escaped, sizeof(escaped), "\\u%04x", ch);
+                    out += escaped;
+                } else {
+                    out += ch;
+                }
+        }
+    }
+    return out + "\"";
+}
+
+std::string jsonBool(bool value) { return value ? "true" : "false"; }
+
+std::string jsonNumber(double value) {
+    if (!std::isfinite(value)) return "0";
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(4) << value;
+    return out.str();
+}
+
+std::string jsonInts(const std::vector<int>& values) {
+    std::string out = "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        out += (i ? "," : "") + std::to_string(values[i]);
+    }
+    return out + "]";
+}
+
+std::string errorJson(const std::string& message) {
+    return "{\"ok\":false,\"error\":" + jsonText(message) + "}";
+}
+
+std::string okJson(const std::string& body = "") {
+    return body.empty() ? "{\"ok\":true}" : "{\"ok\":true," + body + "}";
+}
+
+// Splits on '|' keeping empty fields, trimming each one.
+std::vector<std::string> payloadFields(const std::string& payload) {
+    std::vector<std::string> fields;
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t bar = payload.find('|', start);
+        fields.push_back(ExamScheduler::trim(payload.substr(start, bar - start)));
+        if (bar == std::string::npos) break;
+        start = bar + 1;
+    }
+    return fields;
+}
+
+std::vector<std::string> payloadWords(const std::string& payload) {
+    std::istringstream stream(payload);
+    std::vector<std::string> words;
+    std::string word;
+    while (stream >> word) words.push_back(word);
+    return words;
+}
+
+bool payloadNumber(const std::string& text, long long min, long long max, long long& value) {
+    const std::string t = ExamScheduler::trim(text);
+    if (t.empty()) return false;
+    std::size_t used = 0;
+    try {
+        value = std::stoll(t, &used);
+    } catch (const std::exception&) {
+        return false;
+    }
+    return used == t.size() && value >= min && value <= max;
+}
+
+// Optional "[nodes] [ms]" arguments starting at words[first].
+bool parseLimits(const std::vector<std::string>& words, std::size_t first, SearchLimits& limits,
+                 std::string& error) {
+    long long value = 0;
+    if (words.size() > first) {
+        if (!payloadNumber(words[first], 1, kMaxNodeLimit, value)) {
+            error = "Node limit must be a whole number between 1 and 1,000,000,000.";
+            return false;
+        }
+        limits.nodeLimit = value;
+    }
+    if (words.size() > first + 1) {
+        if (!payloadNumber(words[first + 1], 1, kMaxTimeLimitMs, value)) {
+            error = "Time limit must be between 1 and 600,000 ms.";
+            return false;
+        }
+        limits.timeLimitMs = static_cast<double>(value);
+    }
+    return true;
+}
+
+}  // namespace
+
+void MachineApi::handle(const std::string& line, std::ostream& out) {
+    // "@<id> <verb> [payload]"
+    std::string id;
+    std::size_t pos = 1;
+    while (pos < line.size() && std::isalnum(static_cast<unsigned char>(line[pos]))) {
+        id += line[pos++];
+    }
+    const std::string rest = ExamScheduler::trim(line.substr(std::min(pos, line.size())));
+    const std::size_t space = rest.find(' ');
+    const std::string verb = rest.substr(0, space);
+    const std::string payload =
+        space == std::string::npos ? "" : ExamScheduler::trim(rest.substr(space + 1));
+
+    std::string body;
+    if (id.empty() || id.size() > 16) {
+        id = "0";
+        body = errorJson("Malformed request: expected '@<id> <verb> [payload]'.");
+    } else {
+        try {
+            body = dispatch(verb, payload);
+        } catch (const std::exception& ex) {
+            body = errorJson(std::string("Engine error: ") + ex.what());
+        }
+    }
+    out << "@@BEGIN " << id << '\n' << body << '\n' << "@@END " << id << '\n' << std::flush;
+}
+
+std::string MachineApi::dispatch(const std::string& verb, const std::string& payload) {
+    std::string error;
+    long long id = 0;
+    const std::vector<std::string> fields = payloadFields(payload);
+    auto done = [&error](bool ok) { return ok ? okJson() : errorJson(error); };
+
+    if (verb == "state") return okJson(stateJson());
+    if (verb == "run") return runCommand(payload);
+    if (verb == "compare") return compareJson();
+    if (verb == "tests") {
+        std::ostringstream report;
+        const int failures = runSelfTests(report);
+        std::istringstream reader(report.str());
+        std::string text;
+        std::string list = "[";
+        while (std::getline(reader, text)) {
+            if (text.empty()) continue;
+            list += (list.size() > 1 ? "," : "") + jsonText(text);
+        }
+        return okJson("\"failures\":" + std::to_string(failures) + ",\"lines\":" + list + "]");
+    }
+    if (verb == "sample") {
+        const std::string which = ExamScheduler::toUpper(payload);
+        if (which != "A" && which != "B" && which != "C") return errorJson("Unknown sample.");
+        const SampleId sample = which == "A"   ? SampleId::SmallCollege
+                                : which == "B" ? SampleId::CrownGraph
+                                               : SampleId::StressTest;
+        loadSample(scheduler_, sample);
+        return okJson("\"description\":" + jsonText(sampleDescription(sample)));
+    }
+    if (verb == "clear") {
+        scheduler_.clear();
+        return okJson();
+    }
+    if (verb == "subject.add") {
+        long long students = 0;
+        if (fields.size() != 3) return errorJson("Expected CODE|Name|students.");
+        if (!payloadNumber(fields[2], 0, kMaxCount, students)) {
+            return errorJson("Student count must be a whole number between 0 and 1,000,000.");
+        }
+        if (!scheduler_.addSubject(fields[0], fields[1], static_cast<int>(students), error)) {
+            return errorJson(error);
+        }
+        return okJson("\"id\":" + std::to_string(scheduler_.subjects().back().id));
+    }
+    if (verb == "batch.add") {
+        long long students = 0;
+        if (fields.size() != 3) return errorJson("Expected Name|students|id,id,...");
+        if (!payloadNumber(fields[1], 1, kMaxCount, students)) {
+            return errorJson("Student count must be a whole number between 1 and 1,000,000.");
+        }
+        std::vector<int> ids;
+        std::string list = fields[2];
+        std::replace(list.begin(), list.end(), ',', ' ');
+        for (const std::string& word : payloadWords(list)) {
+            if (!payloadNumber(word, 1, kMaxCount * 1000, id)) {
+                return errorJson("Subject ids must be whole numbers.");
+            }
+            ids.push_back(static_cast<int>(id));
+        }
+        if (!scheduler_.addBatch(fields[0], static_cast<int>(students), ids, error)) {
+            return errorJson(error);
+        }
+        return okJson("\"id\":" + std::to_string(scheduler_.batches().back().id));
+    }
+    if (verb == "slot.add") return done(scheduler_.addSlot(payload, error));
+    if (verb == "slot.set") {
+        long long flag = 0;
+        if (fields.size() != 2 || !payloadNumber(fields[0], 1, kMaxNodeLimit, id) ||
+            !payloadNumber(fields[1], 0, 1, flag)) {
+            return errorJson("Expected <slot id>|1 or <slot id>|0.");
+        }
+        return done(scheduler_.setSlotAvailable(static_cast<int>(id), flag == 1, error));
+    }
+    if (verb == "subject.remove" || verb == "batch.remove" || verb == "slot.remove") {
+        if (!payloadNumber(payload, 1, kMaxNodeLimit, id)) return errorJson("Expected an id.");
+        const int target = static_cast<int>(id);
+        if (verb == "subject.remove") return done(scheduler_.removeSubject(target, error));
+        if (verb == "batch.remove") return done(scheduler_.removeBatch(target, error));
+        return done(scheduler_.removeSlot(target, error));
+    }
+    if (verb == "save") return done(scheduler_.saveToFile(payload, error));
+    if (verb == "load") return done(scheduler_.loadFromFile(payload, error));
+    return errorJson("Unknown command '" + verb + "'.");
+}
+
+std::string MachineApi::runCommand(const std::string& payload) {
+    const std::vector<std::string> words = payloadWords(payload);
+    if (words.empty()) return errorJson("Expected: run greedy|backtrack|bnb ...");
+    if (scheduler_.subjects().empty()) return errorJson("There are no subjects to schedule.");
+    const Graph& graph = scheduler_.graph();
+    std::string error;
+    SearchLimits limits;
+    ColoringResult result;
+
+    if (words[0] == "greedy") {
+        const std::string order = words.size() > 1 ? words[1] : "";
+        if (order.empty() || order == "input") {
+            result = greedyColoring(graph);
+        } else {
+            return errorJson("Greedy only supports input order: run greedy [input].");
+        }
+    } else if (words[0] == "backtrack") {
+        long long k = 0;
+        const long long n = static_cast<long long>(scheduler_.subjects().size());
+        if (words.size() < 2 || !payloadNumber(words[1], 1, n, k)) {
+            return errorJson("k must be between 1 and " + std::to_string(n) + ".");
+        }
+        if (!parseLimits(words, 2, limits, error)) return errorJson(error);
+        result = BacktrackingColorer(graph, limits).canColor(static_cast<int>(k));
+    } else if (words[0] == "bnb") {
+        if (!parseLimits(words, 1, limits, error)) return errorJson(error);
+        result = BranchAndBoundColorer(graph, limits).solve();
+    } else {
+        return errorJson("Unknown algorithm '" + words[0] + "'.");
+    }
+
+    if (result.success) scheduler_.recordResult(result);
+    return okJson("\"result\":" + resultJson(result));
+}
+
+std::string MachineApi::compareJson() {
+    if (scheduler_.subjects().empty()) return errorJson("There are no subjects to schedule.");
+    const Graph& graph = scheduler_.graph();
+    const ColoringResult greedy = greedyColoring(graph);
+    ColoringResult optimal = BranchAndBoundColorer(graph).solve();
+    optimal.colors = alignColors(greedy.colors, optimal.colors);  // same as menu 9
+    scheduler_.recordResult(optimal);
+
+    std::string moved = "[";
+    for (std::size_t v = 0; v < optimal.colors.size(); ++v) {
+        if (optimal.colors[v] == greedy.colors[v]) continue;
+        moved += std::string(moved.size() > 1 ? "," : "") + "{\"subject\":" + std::to_string(v) +
+                 ",\"from\":" + std::to_string(greedy.colors[v]) +
+                 ",\"to\":" + std::to_string(optimal.colors[v]) + "}";
+    }
+    return okJson("\"greedy\":" + resultJson(greedy) + ",\"optimal\":" + resultJson(optimal) +
+                  ",\"moved\":" + moved + "]");
+}
+
+std::string MachineApi::resultJson(const ColoringResult& result) const {
+    std::ostringstream out;
+    out << "{\"method\":" << jsonText(result.method) << ",\"success\":" << jsonBool(result.success)
+        << ",\"colors\":" << jsonInts(result.colors) << ",\"slotsUsed\":" << result.slotsUsed
+        << ",\"timeMs\":" << jsonNumber(result.timeMs)
+        << ",\"nodesExplored\":" << result.nodesExplored
+        << ",\"nodesPruned\":" << result.nodesPruned << ",\"backtracks\":" << result.backtracks
+        << ",\"provenOptimal\":" << jsonBool(result.provenOptimal)
+        << ",\"cutOff\":" << jsonBool(result.cutOff) << ",\"lowerBound\":" << result.lowerBound
+        << ",\"upperBound\":" << result.upperBound;
+
+    if (result.colors.empty()) {
+        out << ",\"valid\":false,\"clashes\":[],\"uncolored\":[],\"schedule\":null}";
+        return out.str();
+    }
+
+    const ValidationReport report = validateColoring(scheduler_.graph(), result.colors);
+    out << ",\"valid\":" << jsonBool(report.valid) << ",\"clashes\":[";
+    for (std::size_t i = 0; i < report.clashes.size(); ++i) {
+        out << (i ? "," : "") << '[' << report.clashes[i].first << ','
+            << report.clashes[i].second << ']';
+    }
+    out << "],\"uncolored\":" << jsonInts(report.uncolored);
+
+    const Schedule schedule = scheduler_.makeSchedule(result.colors);
+    std::vector<int> slotIds;
+    for (const TimeSlot& slot : schedule.slotForColor) slotIds.push_back(slot.id);
+    out << ",\"schedule\":{\"feasible\":" << jsonBool(schedule.feasible)
+        << ",\"slotsNeeded\":" << schedule.slotsNeeded
+        << ",\"slotsAvailable\":" << schedule.slotsAvailable << ",\"slotIds\":" << jsonInts(slotIds)
+        << ",\"partialColors\":" << jsonInts(schedule.partialColors)
+        << ",\"outsideSlots\":" << jsonInts(schedule.outsideSlots)
+        << ",\"unplaced\":" << jsonInts(schedule.unplaced) << "}}";
+    return out.str();
+}
+
+std::string MachineApi::stateJson() const {
+    const Graph& graph = scheduler_.graph();
+    const auto& subjects = scheduler_.subjects();
+    std::ostringstream out;
+
+    out << "\"subjects\":[";
+    for (std::size_t i = 0; i < subjects.size(); ++i) {
+        const Subject& s = subjects[i];
+        std::vector<int> batchIds;
+        for (const Batch& b : scheduler_.batches()) {
+            if (std::find(b.subjectIds.begin(), b.subjectIds.end(), s.id) != b.subjectIds.end()) {
+                batchIds.push_back(b.id);
+            }
+        }
+        const int index = static_cast<int>(i);
+        out << (i ? "," : "") << "{\"id\":" << s.id << ",\"code\":" << jsonText(s.code)
+            << ",\"name\":" << jsonText(s.name)
+            << ",\"students\":" << scheduler_.studentsForSubject(index)
+            << ",\"derived\":" << jsonBool(s.studentCount == 0)
+            << ",\"degree\":" << graph.degree(index) << ",\"batches\":" << jsonInts(batchIds) << '}';
+    }
+
+    out << "],\"batches\":[";
+    for (std::size_t i = 0; i < scheduler_.batches().size(); ++i) {
+        const Batch& b = scheduler_.batches()[i];
+        out << (i ? "," : "") << "{\"id\":" << b.id << ",\"name\":" << jsonText(b.name)
+            << ",\"students\":" << b.studentCount << ",\"subjects\":" << jsonInts(b.subjectIds)
+            << '}';
+    }
+
+    out << "],\"slots\":[";
+    for (std::size_t i = 0; i < scheduler_.slots().size(); ++i) {
+        const TimeSlot& t = scheduler_.slots()[i];
+        out << (i ? "," : "") << "{\"id\":" << t.id << ",\"label\":" << jsonText(t.label)
+            << ",\"available\":" << jsonBool(t.available) << '}';
+    }
+
+    out << "],\"edges\":[";
+    for (std::size_t i = 0; i < graph.edges().size(); ++i) {
+        const ConflictEdge& e = graph.edges()[i];
+        out << (i ? "," : "") << "{\"u\":" << e.u << ",\"v\":" << e.v << ",\"weight\":" << e.weight
+            << ",\"reasons\":[";
+        for (std::size_t r = 0; r < e.reasons.size(); ++r) {
+            out << (r ? "," : "") << jsonText(e.reasons[r]);
+        }
+        out << "]}";
+    }
+
+    int isolated = 0;
+    for (int v = 0; v < graph.vertexCount(); ++v) isolated += graph.degree(v) == 0 ? 1 : 0;
+    out << "],\"stats\":{\"vertices\":" << graph.vertexCount() << ",\"edges\":" << graph.edgeCount()
+        << ",\"density\":" << jsonNumber(graph.density()) << ",\"maxDegree\":" << graph.maxDegree()
+        << ",\"avgDegree\":" << jsonNumber(graph.avgDegree())
+        << ",\"components\":" << graph.connectedComponents() << ",\"isolated\":" << isolated
+        << ",\"clique\":" << jsonInts(greedyClique(graph))
+        << ",\"totalStudents\":" << scheduler_.totalStudents()
+        << ",\"availableSlots\":" << scheduler_.availableSlots().size() << '}'
+        << ",\"limits\":{\"nodeLimit\":" << kDefaultNodeLimit
+        << ",\"timeLimitMs\":" << jsonNumber(kDefaultTimeLimitMs) << '}';
+
+    const auto& last = scheduler_.lastResult();
+    out << ",\"last\":" << (last ? resultJson(*last) : "null");
+    return out.str();
+}
+
 // ======================= src/App.cpp =======================
 // =============================================================================
 // App.cpp - menu-driven console front end.
@@ -2069,10 +2479,27 @@ std::vector<std::string> wrapItems(const std::string& prefix, const std::vector<
 // ----------------------------------------------------------------------------
 int App::run() {
     try {
+        bool showMenuNext = true;
+        bool quietPrompt = false;
         while (true) {
-            showMenu();
-            const int choice = console_.readInt("Enter choice (1-16): ", 1, 16);
-            if (!handleChoice(choice)) break;
+            if (showMenuNext) showMenu();
+            // After a machine command the prompt is not repeated, so GUI
+            // traffic does not flood a human reading the same console.
+            const std::string line = console_.readLine(quietPrompt ? "" : "Enter choice (1-16): ");
+            quietPrompt = false;
+            showMenuNext = false;
+            if (!line.empty() && line[0] == '@') {
+                machine_.handle(line, std::cout);
+                quietPrompt = true;
+                continue;
+            }
+            long long choice = 0;
+            if (!Console::parseNumber(line, 1, 16, choice)) {
+                std::cout << console_.bad("  Please enter a whole number between 1 and 16.") << '\n';
+                continue;
+            }
+            if (!handleChoice(static_cast<int>(choice))) break;
+            showMenuNext = true;
         }
     } catch (const InputClosed&) {
         std::cout << "\nInput closed - exiting.\n";
@@ -2528,7 +2955,7 @@ void App::presentResult(const ColoringResult& result) {
     if (result.upperBound > 0) {
         std::cout << "  Nodes pruned        : " << result.nodesPruned << '\n'
                   << "  Initial bounds      : LB (clique) = " << result.lowerBound
-                  << ", UB (best greedy) = " << result.upperBound << '\n'
+                  << ", UB (greedy) = " << result.upperBound << '\n'
                   << "  Optimality proven   : " << (result.provenOptimal ? "Yes" : "No") << '\n';
     }
     if (result.cutOff) {
@@ -2571,13 +2998,7 @@ void App::presentResult(const ColoringResult& result) {
 void App::runGreedy() {
     console_.header("GREEDY COLOURING");
     if (!requireSubjects() || !requireAvailableSlots()) return;
-    std::cout << "  1. Input order\n  2. Descending degree (Welsh-Powell)\n"
-              << "  3. DSATUR (highest saturation first)\n";
-    const int choice = console_.readInt("Ordering: ", 1, 3);
-    const GreedyOrder order = choice == 1   ? GreedyOrder::Input
-                              : choice == 2 ? GreedyOrder::WelshPowell
-                                            : GreedyOrder::Dsatur;
-    presentResult(greedyColoring(scheduler_.graph(), order));
+    presentResult(greedyColoring(scheduler_.graph()));
 }
 
 void App::runBacktracking() {
@@ -2628,7 +3049,7 @@ void App::runBranchAndBound() {
 void App::compareGreedyVsOptimal() {
     if (!requireSubjects()) return;
     const Graph& graph = scheduler_.graph();
-    const ColoringResult greedy = greedyColoring(graph, GreedyOrder::Input);
+    const ColoringResult greedy = greedyColoring(graph);
     const ColoringResult optimal = BranchAndBoundColorer(graph).solve();
     // Rename optimal slots to match greedy where possible so "moves" are real.
     const std::vector<int> aligned = alignColors(greedy.colors, optimal.colors);
@@ -2866,8 +3287,7 @@ void App::runTests() const {
 // ---------------------------------------------------------------------------
 //  Algorithm                  Time                       Space
 //  Graph construction         O(V^2 + sum s^2 * log E)   O(V^2 + E)
-//  Greedy (input / degree)    O(V + E)  (+ V log V sort) O(V)
-//  DSATUR                     O(V^2 + E log V)           O(V + E)
+//  Greedy (input order)       O(V + E)                   O(V)
 //  Verifier                   O(V + E)                   O(V)
 //  Clique lower bound         O(V^3)                     O(V)
 //  Backtracking  canColor(k)  O(k^V) worst case          O(V) + recursion O(V)
@@ -2879,10 +3299,21 @@ void App::runTests() const {
 #include <iostream>
 #include <string>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 int main(int argc, char* argv[]) {
     if (argc > 1 && std::string(argv[1]) == "--test") {
         return runSelfTests(std::cout) == 0 ? 0 : 1;
     }
     App app;
-    return app.run();
+    const int code = app.run();
+#ifdef __EMSCRIPTEN__
+    // After Asyncify has suspended main, a plain return does not end the
+    // runtime, so exit explicitly to let the web page know the program ended.
+    std::cout << std::flush;
+    emscripten_force_exit(code);
+#endif
+    return code;
 }

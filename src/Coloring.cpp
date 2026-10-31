@@ -1,20 +1,10 @@
 // =============================================================================
-// Coloring.cpp - verifier, greedy colourings, DSATUR, clique lower bound.
+// Coloring.cpp - verifier, input-order greedy colouring, clique lower bound.
 // =============================================================================
 #include "Coloring.h"
 
 #include <algorithm>
 #include <numeric>
-#include <set>
-
-std::string greedyOrderName(GreedyOrder order) {
-    switch (order) {
-        case GreedyOrder::Input: return "Input order";
-        case GreedyOrder::WelshPowell: return "Welsh-Powell (descending degree)";
-        case GreedyOrder::Dsatur: return "DSATUR (saturation degree)";
-    }
-    return "Unknown";
-}
 
 int countColors(const std::vector<int>& colors) {
     int highest = kUncolored;
@@ -69,62 +59,14 @@ std::vector<int> degreeOrder(const Graph& graph) {
     return order;
 }
 
-std::vector<int> dsaturColoring(const Graph& graph, std::vector<int>* visitOrder) {
-    const int n = graph.vertexCount();
-    std::vector<int> colors(static_cast<std::size_t>(n), kUncolored);
-    std::vector<std::set<int>> neighbourColors(static_cast<std::size_t>(n));
-    std::vector<int> usedBy(static_cast<std::size_t>(n) + 1, -1);
-    if (visitOrder != nullptr) visitOrder->clear();
-
-    for (int step = 0; step < n; ++step) {
-        // Pick the uncoloured vertex with max saturation, then max degree.
-        int pick = -1;
-        for (int v = 0; v < n; ++v) {
-            if (colors[v] != kUncolored) continue;
-            if (pick == -1) {
-                pick = v;
-                continue;
-            }
-            const auto satV = neighbourColors[v].size();
-            const auto satP = neighbourColors[pick].size();
-            if (satV > satP || (satV == satP && graph.degree(v) > graph.degree(pick))) {
-                pick = v;
-            }
-        }
-
-        // Smallest colour not used by a neighbour (same idea as plain greedy).
-        for (int u : graph.neighbors(pick)) {
-            if (colors[u] != kUncolored) usedBy[colors[u]] = pick;
-        }
-        int color = 0;
-        while (usedBy[color] == pick) ++color;
-        colors[pick] = color;
-        if (visitOrder != nullptr) visitOrder->push_back(pick);
-
-        for (int u : graph.neighbors(pick)) neighbourColors[u].insert(color);
-    }
-    return colors;
-}
-
-ColoringResult greedyColoring(const Graph& graph, GreedyOrder order) {
+ColoringResult greedyColoring(const Graph& graph) {
     ColoringResult result;
-    result.method = "Greedy - " + greedyOrderName(order);
+    result.method = "Greedy - Input order";
     const Stopwatch clock;
 
-    switch (order) {
-        case GreedyOrder::Input: {
-            std::vector<int> identity(static_cast<std::size_t>(graph.vertexCount()));
-            std::iota(identity.begin(), identity.end(), 0);
-            result.colors = greedyColorInOrder(graph, identity);
-            break;
-        }
-        case GreedyOrder::WelshPowell:
-            result.colors = greedyColorInOrder(graph, degreeOrder(graph));
-            break;
-        case GreedyOrder::Dsatur:
-            result.colors = dsaturColoring(graph);
-            break;
-    }
+    std::vector<int> identity(static_cast<std::size_t>(graph.vertexCount()));
+    std::iota(identity.begin(), identity.end(), 0);
+    result.colors = greedyColorInOrder(graph, identity);
 
     result.timeMs = clock.elapsedMs();
     result.slotsUsed = countColors(result.colors);
@@ -191,4 +133,14 @@ std::vector<int> alignColors(const std::vector<int>& reference, const std::vecto
         if (c != kUncolored) c = rename[c];
     }
     return aligned;
+}
+
+std::vector<int> constrainedFirstOrder(const Graph& graph) {
+    std::vector<int> order = greedyClique(graph);
+    std::vector<bool> placed(static_cast<std::size_t>(graph.vertexCount()), false);
+    for (int v : order) placed[static_cast<std::size_t>(v)] = true;
+    for (int v : degreeOrder(graph)) {
+        if (!placed[static_cast<std::size_t>(v)]) order.push_back(v);
+    }
+    return order;
 }

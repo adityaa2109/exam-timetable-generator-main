@@ -8,8 +8,7 @@
 // ---------------------------------------------------------------------------
 //  Algorithm                  Time                       Space
 //  Graph construction         O(V^2 + sum s^2 * log E)   O(V^2 + E)
-//  Greedy (input / degree)    O(V + E)  (+ V log V sort) O(V)
-//  DSATUR                     O(V^2 + E log V)           O(V + E)
+//  Greedy (input order)       O(V + E)                   O(V)
 //  Verifier                   O(V + E)                   O(V)
 //  Clique lower bound         O(V^3)                     O(V)
 //  Backtracking  canColor(k)  O(k^V) worst case          O(V) + recursion O(V)
@@ -23,10 +22,21 @@
 #include <iostream>
 #include <string>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 int main(int argc, char* argv[]) {
     if (argc > 1 && std::string(argv[1]) == "--test") {
         return runSelfTests(std::cout) == 0 ? 0 : 1;
     }
     App app;
-    return app.run();
+    const int code = app.run();
+#ifdef __EMSCRIPTEN__
+    // After Asyncify has suspended main, a plain return does not end the
+    // runtime, so exit explicitly to let the web page know the program ended.
+    std::cout << std::flush;
+    emscripten_force_exit(code);
+#endif
+    return code;
 }

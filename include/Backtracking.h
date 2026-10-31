@@ -1,8 +1,8 @@
 // =============================================================================
 // Backtracking.h - m-colouring decision problem: "can the exams fit in k slots?"
 //
-// Idea: colour vertices one at a time (DSATUR order, so tightly constrained
-// subjects come first). For each vertex try colours 0..k-1; keep the first
+// Idea: colour vertices one at a time (clique first, then by descending
+// degree, so tightly constrained subjects come first). For each vertex try colours 0..k-1; keep the first
 // colour that is safe (no adjacent subject already has it) and recurse. If
 // no colour works, undo and return to the previous vertex (backtrack).
 //
@@ -11,7 +11,7 @@
 //
 // Why pruning helps in practice: isSafe() rejects a colour as soon as one
 // neighbour clashes, so a whole subtree of k^(remaining) assignments is
-// discarded in O(V) time. Colouring high-saturation vertices first makes
+// discarded in O(V) time. Colouring highly constrained vertices first makes
 // those failures happen near the root, where each cut removes the most work.
 // =============================================================================
 #pragma once
